@@ -2,10 +2,11 @@ from tensorflow import keras
 import numpy as np
 import asyncio
 from pyppeteer import launch
-from flask import Flask, request
+from flask import Flask, request, Response
 from flask_cors import CORS
 import googlesearch
 from time import perf_counter
+import json
 
 app = Flask(__name__)
 cors = CORS(app)
@@ -43,8 +44,8 @@ def scrape(link):
 				handleSIGHUP=False
 			)
 		page = await browser.newPage()
-		await page.setRequestInterception(True)
-		page.on('request', lambda req: asyncio.ensure_future(handleReq(req)))
+		# await page.setRequestInterception(True)
+		# page.on('request', lambda req: asyncio.ensure_future(handleReq(req)))
 		await page.goto(link)
 		await page.screenshot({'path': 'example.png'})
 		text = await page.evaluate("document.body.innerText")
@@ -69,8 +70,26 @@ def getLyricsFromQuery(query):
 	lines = scrape(link).split('\n')
 	# print(lines)
 	predictions = model.predict(makeDataset(lines))
-	goodlines = [lines[i] for i, prediction in enumerate(predictions) if prediction>0]
-	return goodlines
+	lines = [{"text":lines[i], "isLyric":prediction>0.5} for i, prediction in enumerate(predictions)]
+	ranges = [[0, 0]]
+	lastIndex = 0
+	for i, line in enumerate(lines):
+		if line["isLyric"]:
+			if i-lastIndex>8:
+				ranges.append([i, i])
+			ranges[-1][1] = i
+			lastIndex = i
+	for r in ranges:
+		size = r[1]-r[0]
+		isBiggest = True
+		for r2 in ranges:
+			size2 = r2[1]-r2[0]
+			if size2>size:
+				isBiggest = False
+				break
+		if isBiggest:
+			return [line['text'] for line in lines[r[0]:r[1]]]
+	# return lines
 
 
 @app.route("/")
@@ -80,7 +99,9 @@ def index():
 @app.route("/lyrics")
 def doQuery():
 	query = request.args['q']
-	return str(getLyricsFromQuery(query))
+	# return "<pre>"+"\n".join(f"{'----' if line['isLyric'] else '    '} {line['text']}" for line in getLyricsFromQuery(query))+"</pre>"
+	# return "<pre>"+"\n".join(getLyricsFromQuery(query))+"</pre>"
+	return Response(json.dumps(getLyricsFromQuery(query)), mimetype='application/json')
 
 if __name__ == "__main__":
 	app.run(host="0.0.0.0", port=5000, debug=True)
